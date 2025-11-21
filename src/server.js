@@ -1,19 +1,18 @@
-const express = require('express');
-const dotenv = require('dotenv');
-const cors = require('cors');
-const morgan = require('morgan');
-const connectDB = require('./config/db');
-const errorHandler = require('./middleware/error');
+const express = require("express");
+const dotenv = require("dotenv");
+const cors = require("cors");
+const connectDB = require("./config/db");
 
 // Load env vars
-dotenv.config({ path: './.env' });
+dotenv.config({ path: "./.env" });
 
 // Connect to database
 connectDB();
 
 // Route files
-const auth = require('./routes/auth');
-const problems = require('./routes/problems');
+const auth = require("./routes/auth");
+const problems = require("./routes/problems");
+const topics = require("./routes/topic");
 
 const app = express();
 
@@ -21,19 +20,17 @@ const app = express();
 app.use(express.json());
 
 // Enable CORS
-app.use(cors());
-
-// Dev logging middleware
-if (process.env.NODE_ENV === 'development') {
-  app.use(morgan('dev'));
-}
+app.use(
+  cors({
+    origin: process.env.FRONTEND_URL || "http://localhost:3000",
+    credentials: true,
+  })
+);
 
 // Mount routers
-app.use('/api/v1/auth', auth);
-app.use('/api/v1/problems', problems);
-
-// Error handler middleware (must be after route handlers)
-app.use(errorHandler);
+app.use("/api/v1/auth", auth);
+app.use("/api/v1/problems", problems);
+app.use("/api/v1/topics", topics);
 
 const PORT = process.env.PORT || 5000;
 
@@ -43,7 +40,7 @@ const server = app.listen(
 );
 
 // Handle unhandled promise rejections
-process.on('unhandledRejection', (err, promise) => {
+process.on("unhandledRejection", (err, promise) => {
   console.log(`Error: ${err.message}`.red);
   // Close server & exit process
   server.close(() => process.exit(1));

@@ -1,99 +1,244 @@
-const User = require('../models/User');
-const ErrorResponse = require('../utils/errorResponse');
-const asyncHandler = require('../middleware/async');
+// src/controllers/auth.js
+const User = require("../models/User");
+const { successResponse, errorResponse } = require("../utils/response");
+const logger = require("../utils/logger");
 
-// @desc    Register user
+// @desc    Register a new user
 // @route   POST /api/v1/auth/register
 // @access  Public
-exports.register = asyncHandler(async (req, res, next) => {
-  const { name, email, password } = req.body;
+exports.register = async (req, res) => {
+  try {
+    const { name, email, password, role = "user" } = req.body;
 
-  // Create user
-  const user = await User.create({
-    name,
-    email,
-    password
-  });
+    if (await User.isEmailTaken(email))
+      return errorResponse(res, 400, "Email already in use");
 
-  sendTokenResponse(user, 200, res);
-});
+    const user = await User.create({
+      name,
+      email: email.toLowerCase(),
+      password,
+      role,
+    });
+
+    const token = user.getSignedJwtToken();
+    user.token = token;
+
+    return successResponse(res, 201, "User registered successfully", user);
+  } catch (err) {
+    logger.error("Registration error", {
+      error: err.message,
+      stack: err.stack,
+    });
+    return errorResponse(
+      res,
+      500,
+      "Server error during registration",
+      err.message
+    );
+  }
+};
 
 // @desc    Login user
 // @route   POST /api/v1/auth/login
 // @access  Public
-exports.login = asyncHandler(async (req, res, next) => {
-  const { email, password } = req.body;
+exports.login = async (req, res) => {
+  try {
+    const { email, password, role } = req.body;
 
-  // Validate email & password
-  if (!email || !password) {
-    return next(new ErrorResponse('Please provide an email and password', 400));
+    if (!email || !password) {
+      return errorResponse(res, 400, "Please provide email and password");
+    }
+
+    // Check for user
+    const user = await User.findOne({ email, role }).select("+password");
+
+    if (!user || !(await user.matchPassword(password))) {
+      logger.warn("Failed login attempt", { email, role });
+      return errorResponse(res, 401, "Invalid credentials");
+    }
+
+    user.token = user.getSignedJwtToken();
+    await user.save();
+    logger.info("User logged in", { userId: user._id });
+
+    const userObj = user.toObject();
+    delete userObj.password;
+
+    return successResponse(res, 200, "Login successful", userObj);
+  } catch (err) {
+    logger.error("Login error", { error: err.message, stack: err.stack });
+    return errorResponse(res, 500, "Server error during login", err.message);
   }
-
-  // Check for user
-  const user = await User.findOne({ email }).select('+password');
-
-  if (!user) {
-    return next(new ErrorResponse('Invalid credentials', 401));
-  }
-
-  // Check if password matches
-  const isMatch = await user.matchPassword(password);
-
-  if (!isMatch) {
-    return next(new ErrorResponse('Invalid credentials', 401));
-  }
-
-  sendTokenResponse(user, 200, res);
-});
+};
 
 // @desc    Get current logged in user
 // @route   GET /api/v1/auth/me
 // @access  Private
-exports.getMe = asyncHandler(async (req, res, next) => {
-  const user = await User.findById(req.user.id);
+exports.getMe = async (req, res) => {
+  try {
+    const user = await User.findById(req.user.id).select("-password -__v");
+    if (!user) {
+      return errorResponse(res, 404, "User not found");
+    }
+    return successResponse(res, 200, "User retrieved successfully", user);
+  } catch (err) {
+    logger.error("Get user error", { error: err.message, stack: err.stack });
+    return errorResponse(res, 500, "Server error", err.message);
+  }
+};
 
-  res.status(200).json({
-    success: true,
-    data: user
-  });
-});
-
-// @desc    Log user out / clear cookie
+// @desc    Logout user
 // @route   GET /api/v1/auth/logout
 // @access  Private
-exports.logout = asyncHandler(async (req, res, next) => {
-  res.cookie('token', 'none', {
-    expires: new Date(Date.now() + 10 * 1000),
-    httpOnly: true
-  });
+// @desc    Logout user
+// @route   POST /api/v1/auth/logout
+// @access  Private
+exports.logout = async (req, res) => {
+  try {
+    const user = await User.findByIdAndUpdate(
+      req.user.id,
+      { $unset: { token: "" } },
+      { new: true }
+    );
 
-  res.status(200).json({
-    success: true,
-    data: {}
-  });
-});
+    if (!user) {
+      return errorResponse(res, 404, "User not found");
+    }
 
-// Get token from model, create cookie and send response
-const sendTokenResponse = (user, statusCode, res) => {
-  // Create token
-  const token = user.getSignedJwtToken();
-
-  const options = {
-    expires: new Date(
-      Date.now() + process.env.JWT_COOKIE_EXPIRE * 24 * 60 * 60 * 1000
-    ),
-    httpOnly: true
-  };
-
-  if (process.env.NODE_ENV === 'production') {
-    options.secure = true;
-  }
-
-  res
-    .status(statusCode)
-    .cookie('token', token, options)
-    .json({
-      success: true,
-      token
+    logger.info("User logged out", { userId: req.user.id });
+    return successResponse(res, 200, "Logout successful", null);
+  } catch (err) {
+    logger.error(`Logout error: ${err.message}`, {
+      error: err.message,
+      stack: process.env.NODE_ENV === "development" ? err.stack : undefined,
+      userId: req.user?.id,
     });
+    return errorResponse(res, 500, "Error during logout", err.message);
+  }
+};
+
+// @desc    Get all users
+// @route   GET /api/v1/auth/admin/users
+// @access  Private
+exports.getUsers = async (req, res) => {
+  try {
+    const page = Math.max(1, parseInt(req.query.page) || 1);
+    const limit = Math.min(100, Math.max(1, parseInt(req.query.limit) || 10));
+    const skip = (page - 1) * limit;
+
+    const query = req.query.search
+      ? {
+          $or: ["name", "email", "phone"].map((f) => ({
+            [f]: { $regex: req.query.search, $options: "i" },
+          })),
+        }
+      : {};
+
+    const [total, users] = await Promise.all([
+      User.countDocuments(query),
+      User.find(query)
+        .select("-password -token -__v")
+        .sort({ createdAt: -1 })
+        .skip(skip)
+        .limit(limit)
+        .lean(),
+    ]);
+
+    return successResponse(res, 200, "Users retrieved successfully", {
+      users,
+      pagination: {
+        page,
+        limit,
+        totalPages: Math.ceil(total / limit),
+        total,
+      },
+    });
+  } catch (err) {
+    logger.error("Get user error", { error: err.message, stack: err.stack });
+    return errorResponse(res, 500, "Server error", err.message);
+  }
+};
+
+// @desc    Update user
+// @route   PUT /api/v1/auth/admin/update-details/:id
+// @access  Private/Admin
+exports.updateUsers = async (req, res) => {
+  try {
+    const { name, email, role } = req.body;
+    const updates = {};
+
+    // Only include fields that are provided in the request
+    if (name) updates.name = name;
+    if (email) {
+      // Check if email is already taken by another user
+      const existingUser = await User.findOne({
+        email,
+        _id: { $ne: req.params.id },
+      });
+      if (existingUser) {
+        return errorResponse(res, 400, "Email already in use");
+      }
+      updates.email = email.toLowerCase();
+    }
+    if (role && ["user", "admin"].includes(role)) {
+      // Only allow role update if user is admin
+      if (req.user.role === "admin") {
+        updates.role = role;
+      }
+    }
+
+    const user = await User.findByIdAndUpdate(
+      req.params.id,
+      { $set: updates },
+      {
+        new: true,
+        runValidators: true,
+      }
+    ).select("-password -token -__v");
+
+    if (!user) {
+      return errorResponse(res, 404, "User not found");
+    }
+
+    logger.info("User updated", {
+      updatedBy: req.user.id,
+      userId: user._id,
+      updates: Object.keys(updates),
+    });
+
+    return successResponse(res, 200, "User updated successfully", user);
+  } catch (err) {
+    logger.error(`Update user error: ${err.message}`, {
+      error: err.message,
+      stack: process.env.NODE_ENV === "development" ? err.stack : undefined,
+      userId: req.params.id,
+      updatedBy: req.user?.id,
+    });
+    return errorResponse(res, 500, "Error updating user", err.message);
+  }
+};
+
+// @desc    Delete user
+// @route   DELETE /api/v1/auth/admin/delete-user/:id
+// @access  Private/Admin
+exports.deleteUser = async (req, res) => {
+  try {
+    const user = await User.findByIdAndDelete(req.params.id);
+    if (!user) {
+      return errorResponse(res, 404, "User not found");
+    }
+    logger.info("User deleted", {
+      deletedBy: req.user.id,
+      userId: user._id,
+    });
+    return successResponse(res, 200, "User deleted successfully", user);
+  } catch (err) {
+    logger.error(`Delete user error: ${err.message}`, {
+      error: err.message,
+      stack: process.env.NODE_ENV === "development" ? err.stack : undefined,
+      userId: req.params.id,
+      deletedBy: req.user?.id,
+    });
+    return errorResponse(res, 500, "Error deleting user", err.message);
+  }
 };
