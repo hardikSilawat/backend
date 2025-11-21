@@ -12,7 +12,7 @@ A comprehensive Data Structures and Algorithms learning platform built with the 
 - **DSA Problem Management**
   - Topic-wise problem categorization
   - Subtopic organization
-  - Difficulty levels (Easy, Medium, Hard)
+  - Difficulty levels (Easy, Medium, Tough)
   - Problem ordering and progression
 
 - **Learning Resources**

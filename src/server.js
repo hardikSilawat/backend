@@ -11,8 +11,8 @@ connectDB();
 
 // Route files
 const auth = require("./routes/auth");
-const problems = require("./routes/problems");
 const topics = require("./routes/topic");
+const subtopics = require("./routes/subTopic");
 
 const app = express();
 
@@ -29,8 +29,8 @@ app.use(
 
 // Mount routers
 app.use("/api/v1/auth", auth);
-app.use("/api/v1/problems", problems);
 app.use("/api/v1/topics", topics);
+app.use("/api/v1/subtopics", subtopics);
 
 const PORT = process.env.PORT || 5000;
 
