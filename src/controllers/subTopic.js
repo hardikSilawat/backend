@@ -357,54 +357,6 @@ exports.getCompletedSubtopics = async (req, res) => {
   }
 };
 
-// @desc    Toggle subtopic completion status
-// @route   POST /api/v1/subtopics/:id/complete
-// @access  Private
-exports.toggleCompletedStatus = async (req, res) => {
-  try {
-    const subtopic = await SubTopic.findById(req.params.id);
-    if (!subtopic) {
-      return errorResponse(res, 404, "Subtopic not found");
-    }
-
-    // Check if already completed
-    const existingCompletion = await CompletedProblem.findOne({
-      user: req.user.id,
-      subtopic: subtopic._id,
-    });
-
-    let message, data, statusCode;
-
-    if (existingCompletion) {
-      // If exists, remove from completed
-      await CompletedProblem.findByIdAndDelete(existingCompletion._id);
-      subtopic.status = "pending";
-      message = "Problem removed from completed successfully";
-      statusCode = 200;
-    } else {
-      // If not exists, mark as completed
-      const completedProblem = await CompletedProblem.create({
-        user: req.user.id,
-        subtopic: subtopic._id,
-      });
-      subtopic.status = "completed";
-      message = "Problem marked as completed successfully";
-      data = completedProblem;
-      statusCode = 201;
-    }
-
-    await subtopic.save();
-
-    return successResponse(res, statusCode, message, data);
-  } catch (error) {
-    logger.error(`Toggle completion status error: ${error.message}`, { error });
-    if (error.name === "CastError") {
-      return errorResponse(res, 400, "Invalid subtopic ID format");
-    }
-    return errorResponse(res, 500, "Server error", error.message);
-  }
-};
-
 // @desc    Get user's completed problems
 // @route   GET /api/v1/subtopics/completed
 // @access  Private
@@ -445,47 +397,6 @@ exports.getCompletedProblems = async (req, res) => {
     );
   } catch (error) {
     logger.error(`Get completed problems error: ${error.message}`, { error });
-    return errorResponse(res, 500, "Server error", error.message);
-  }
-};
-
-// @desc    Remove problem from completed
-// @route   DELETE /api/v1/subtopics/:id/complete
-// @access  Private
-exports.removeFromCompleted = async (req, res) => {
-  try {
-    const subtopic = await SubTopic.findById(req.params.id);
-    if (!subtopic) {
-      return errorResponse(res, 404, "Subtopic not found");
-    }
-
-    const result = await CompletedProblem.findOneAndDelete({
-      user: req.user.id,
-      subtopic: subtopic._id,
-    });
-
-    if (!result) {
-      return errorResponse(
-        res,
-        404,
-        "This problem was not marked as completed"
-      );
-    }
-
-    // Update subtopic status
-    subtopic.status = "pending";
-    await subtopic.save();
-
-    return successResponse(
-      res,
-      200,
-      "Problem removed from completed successfully"
-    );
-  } catch (error) {
-    logger.error(`Remove from completed error: ${error.message}`, { error });
-    if (error.name === "CastError") {
-      return errorResponse(res, 400, "Invalid subtopic ID format");
-    }
     return errorResponse(res, 500, "Server error", error.message);
   }
 };

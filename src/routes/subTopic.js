@@ -8,10 +8,6 @@ const {
   deleteSubtopic,
   updateSubtopicStatus,
   getCompletedSubtopics,
-  markAsCompleted,
-  getCompletedProblems,
-  removeFromCompleted,
-  toggleCompletedStatus,
 } = require("../controllers/subTopic");
 
 const router = express.Router();
@@ -32,7 +28,5 @@ router.delete("/:id", protect, deleteSubtopic);
 
 // Status update route
 router.put("/:id/status", protect, updateSubtopicStatus);
-
-router.post('/:id/toggle-complete', protect, toggleCompletedStatus);
 
 module.exports = router;

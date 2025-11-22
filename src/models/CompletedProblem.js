@@ -13,10 +13,6 @@ const CompletedProblemSchema = new mongoose.Schema(
       ref: "Subtopic",
       required: true,
     },
-    completedAt: {
-      type: Date,
-      default: Date.now,
-    },
   },
   {
     timestamps: true,
