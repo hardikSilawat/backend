@@ -1,7 +1,10 @@
 const Topic = require("../models/Topic");
+const Subtopic = require("../models/SubTopic");
 const { errorResponse, successResponse } = require("../utils/response");
 const logger = require("../utils/logger");
 const { default: mongoose } = require("mongoose");
+const SubTopic = require("../models/SubTopic");
+const CompletedProblem = require("../models/CompletedProblem");
 
 // @desc    Get all topics
 // @route   GET /api/v1/topics
@@ -52,9 +55,9 @@ exports.getTopics = async (req, res) => {
 // @access  Public
 exports.searchTopics = async (req, res) => {
   try {
-    const { q: query = "", difficulty, page = 1, limit = 10 } = req.query;
+    const { q: query = "", page = 1, limit = 10 } = req.query;
     const { topics, pagination } = await Topic.search(query, {
-      difficulty,
+    
       page,
       limit,
     });
@@ -112,7 +115,7 @@ exports.getTopicBySlug = async (req, res) => {
 // @access  Private/Admin
 exports.createTopic = async (req, res) => {
   try {
-    const { name, description, difficulty } = req.body;
+    const { name, description } = req.body;
 
     // Check if topic exists
     const existingTopic = await Topic.findOne({ name });
@@ -123,7 +126,6 @@ exports.createTopic = async (req, res) => {
     const topicData = {
       name,
       description,
-      difficulty: difficulty || "medium",
     };
 
     const topic = await Topic.create(topicData);
@@ -143,7 +145,7 @@ exports.createTopic = async (req, res) => {
 // @access  Private/Admin
 exports.updateTopic = async (req, res) => {
   try {
-    const { name, description, difficulty, isActive } = req.body;
+    const { name, description,  isActive } = req.body;
 
     let topic = await Topic.findById(req.params.id);
     if (!topic) {
@@ -161,7 +163,6 @@ exports.updateTopic = async (req, res) => {
     // Update fields
     topic.name = name || topic.name;
     if (description !== undefined) topic.description = description;
-    if (difficulty) topic.difficulty = difficulty;
     if (isActive !== undefined) topic.isActive = isActive;
 
     await topic.save();
@@ -182,31 +183,38 @@ exports.updateTopic = async (req, res) => {
 exports.deleteTopic = async (req, res) => {
   try {
     const topic = await Topic.findById(req.params.id);
-
     if (!topic) {
       return errorResponse(res, 404, "Topic not found");
     }
 
-    // Check if topic has associated problems
-    const problemCount = await mongoose
-      .model("Problem")
-      .countDocuments({ topic: topic._id });
-    if (problemCount > 0) {
-      return errorResponse(
-        res,
-        400,
-        `Cannot delete topic with ${problemCount} associated problem(s). Remove problems first.`
-      );
+    // Check if topic has any subtopics
+    const subtopics = await SubTopic.find({ topic: topic._id });
+
+    if (subtopics.length > 0) {
+      // Delete all completed problems for these subtopics
+      await CompletedProblem.deleteMany({
+        subtopic: { $in: subtopics.map(st => st._id) }
+      });
+      
+      // Delete all subtopics
+      await SubTopic.deleteMany({ topic: topic._id });
     }
 
-    // Using deleteOne() instead of remove()
+    // Delete the topic
     await Topic.deleteOne({ _id: topic._id });
 
-    return successResponse(res, 200, "Topic deleted successfully", null);
+    return successResponse(
+      res,
+      200,
+      subtopics.length > 0
+        ? "Topic and all associated data deleted successfully"
+        : "Topic deleted successfully",
+      null
+    );
   } catch (error) {
-    logger.error(`Delete topic error: ${error.message}`, { 
+    logger.error(`Delete topic error: ${error.message}`, {
       error: error.message,
-      stack: process.env.NODE_ENV === 'development' ? error.stack : undefined
+      stack: process.env.NODE_ENV === "development" ? error.stack : undefined,
     });
     if (error.name === "CastError") {
       return errorResponse(res, 400, "Invalid topic ID format");

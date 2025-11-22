@@ -7,23 +7,28 @@ const SubtopicSchema = new mongoose.Schema(
       type: String,
       required: [true, "Please add a subtopic name"],
       trim: true,
-      maxlength: [100, "Name cannot be more than 100 characters"]
+      maxlength: [100, "Name cannot be more than 100 characters"],
     },
     slug: {
       type: String,
       unique: true,
-      index: true
+      index: true,
+    },
+    description: {
+      type: String,
+      trim: true,
+      maxlength: [1000, "Description cannot be more than 1000 characters"],
     },
     topic: {
       type: mongoose.Schema.Types.ObjectId,
       ref: "Topic",
-      required: [true, "Please select a topic"]
+      required: [true, "Please select a topic"],
     },
     difficulty: {
       type: String,
       required: true,
       enum: ["easy", "medium", "tough"],
-      default: "easy"
+      default: "easy",
     },
     youtubeLink: {
       type: String,
@@ -52,8 +57,8 @@ const SubtopicSchema = new mongoose.Schema(
     },
     status: {
       type: String,
-      enum: ['pending', 'completed'],
-      default: 'pending'
+      enum: ["pending", "completed"],
+      default: "pending",
     },
   },
   {
@@ -104,10 +109,10 @@ SubtopicSchema.statics.search = async function (query, options = {}) {
       {
         $or: [
           { name: { $regex: query, $options: "i" } },
-          { description: { $regex: query, $options: "i" } }
-        ]
-      }
-    ]
+          { description: { $regex: query, $options: "i" } },
+        ],
+      },
+    ],
   };
 
   if (difficulty) {
@@ -125,7 +130,7 @@ SubtopicSchema.statics.search = async function (query, options = {}) {
       .skip(skip)
       .limit(parseInt(limit))
       .lean(),
-    this.countDocuments(searchQuery)
+    this.countDocuments(searchQuery),
   ]);
 
   return {
@@ -134,8 +139,8 @@ SubtopicSchema.statics.search = async function (query, options = {}) {
       total,
       page: parseInt(page),
       limit: parseInt(limit),
-      totalPages: Math.ceil(total / limit)
-    }
+      totalPages: Math.ceil(total / limit),
+    },
   };
 };
 

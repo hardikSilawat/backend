@@ -3,6 +3,7 @@ const asyncHandler = require("../middleware/async");
 const SubTopic = require("../models/SubTopic");
 const logger = require("../utils/logger");
 const { successResponse, errorResponse } = require("../utils/response");
+const CompletedProblem = require("../models/CompletedProblem");
 
 // @desc    Get all subtopics
 // @route   GET /api/v1/subtopics
@@ -62,22 +63,35 @@ exports.getSubtopics = async (req, res) => {
 // @desc    Get single subtopic by ID
 // @route   GET /api/v1/subtopics/:id
 // @access  Private
+// In subTopic.js controller
 exports.getSubtopic = async (req, res) => {
   try {
-    const subtopic = await SubTopic.findById(req.params.id).populate(
-      "topic",
-      "name slug"
-    );
+    const subtopic = await SubTopic.findById(req.params.id)
+      .populate("topic", "name slug")
+      .lean();
 
     if (!subtopic) {
       return errorResponse(res, 404, "Subtopic not found");
     }
 
+    // Check if the subtopic is completed by the current user
+    const completedProblem = await CompletedProblem.findOne({
+      user: req.user.id,
+      subtopic: subtopic._id,
+    });
+
+    // Add completion status to the response
+    const subtopicWithStatus = {
+      ...subtopic,
+      isCompleted: !!completedProblem,
+      completedAt: completedProblem?.completedAt,
+    };
+
     return successResponse(
       res,
       200,
       "Subtopic retrieved successfully",
-      subtopic
+      subtopicWithStatus
     );
   } catch (error) {
     logger.error(`Get subtopic error: ${error.message}`, { error });
@@ -93,7 +107,7 @@ exports.getSubtopic = async (req, res) => {
 // @access  Private/Admin
 exports.createSubtopic = async (req, res) => {
   try {
-    const { name, topic, difficulty, order, status } = req.body;
+    const { name, description, topic, difficulty, order, status } = req.body;
 
     // Check if subtopic with same name exists for the topic
     const existingSubtopic = await SubTopic.findOne({ name, topic });
@@ -107,6 +121,7 @@ exports.createSubtopic = async (req, res) => {
 
     const subtopic = await SubTopic.create({
       name,
+      description,
       topic,
       difficulty: difficulty || "medium",
       order: order || 0,
@@ -129,7 +144,7 @@ exports.createSubtopic = async (req, res) => {
 // @access  Private/Admin
 exports.updateSubtopic = async (req, res) => {
   try {
-    const { name, topic, difficulty, order, status } = req.body;
+    const { name, description, topic, difficulty, order, status } = req.body;
 
     let subtopic = await SubTopic.findById(req.params.id);
     if (!subtopic) {
@@ -154,13 +169,23 @@ exports.updateSubtopic = async (req, res) => {
     // Update fields
     subtopic.name = name || subtopic.name;
     if (topic) subtopic.topic = topic;
+    if (description) subtopic.description = description;
     if (difficulty) subtopic.difficulty = difficulty;
     if (order !== undefined) subtopic.order = order;
     if (status) subtopic.status = status;
 
     // Update other fields
     Object.keys(req.body).forEach((field) => {
-      if (["name", "topic", "difficulty", "order", "status"].includes(field))
+      if (
+        [
+          "name",
+          "description",
+          "topic",
+          "difficulty",
+          "order",
+          "status",
+        ].includes(field)
+      )
         return;
       subtopic[field] = req.body[field];
     });
@@ -254,7 +279,7 @@ exports.getSubtopicsByTopic = async (req, res) => {
     const skip = (page - 1) * limit;
 
     const query = { topic: req.params.topicId };
-    
+
     if (req.query.status) {
       query.status = { $in: req.query.status.split(",") };
     }
@@ -269,7 +294,7 @@ exports.getSubtopicsByTopic = async (req, res) => {
         .sort({ order: 1 })
         .skip(skip)
         .limit(limit)
-        .lean()
+        .lean(),
     ]);
 
     return successResponse(res, 200, "Subtopics retrieved successfully", {
@@ -278,11 +303,11 @@ exports.getSubtopicsByTopic = async (req, res) => {
         page,
         limit,
         totalPages: Math.ceil(total / limit),
-        total
-      }
+        total,
+      },
     });
   } catch (error) {
-    logger.error(`Get subtopics by topic error: ${error.message}`, { 
+    logger.error(`Get subtopics by topic error: ${error.message}`, {
       error: error.message,
       stack: process.env.NODE_ENV === "development" ? error.stack : undefined,
     });
@@ -328,6 +353,139 @@ exports.getCompletedSubtopics = async (req, res) => {
     );
   } catch (error) {
     logger.error(`Get completed subtopics error: ${error.message}`, { error });
+    return errorResponse(res, 500, "Server error", error.message);
+  }
+};
+
+// @desc    Toggle subtopic completion status
+// @route   POST /api/v1/subtopics/:id/complete
+// @access  Private
+exports.toggleCompletedStatus = async (req, res) => {
+  try {
+    const subtopic = await SubTopic.findById(req.params.id);
+    if (!subtopic) {
+      return errorResponse(res, 404, "Subtopic not found");
+    }
+
+    // Check if already completed
+    const existingCompletion = await CompletedProblem.findOne({
+      user: req.user.id,
+      subtopic: subtopic._id,
+    });
+
+    let message, data, statusCode;
+
+    if (existingCompletion) {
+      // If exists, remove from completed
+      await CompletedProblem.findByIdAndDelete(existingCompletion._id);
+      subtopic.status = "pending";
+      message = "Problem removed from completed successfully";
+      statusCode = 200;
+    } else {
+      // If not exists, mark as completed
+      const completedProblem = await CompletedProblem.create({
+        user: req.user.id,
+        subtopic: subtopic._id,
+      });
+      subtopic.status = "completed";
+      message = "Problem marked as completed successfully";
+      data = completedProblem;
+      statusCode = 201;
+    }
+
+    await subtopic.save();
+
+    return successResponse(res, statusCode, message, data);
+  } catch (error) {
+    logger.error(`Toggle completion status error: ${error.message}`, { error });
+    if (error.name === "CastError") {
+      return errorResponse(res, 400, "Invalid subtopic ID format");
+    }
+    return errorResponse(res, 500, "Server error", error.message);
+  }
+};
+
+// @desc    Get user's completed problems
+// @route   GET /api/v1/subtopics/completed
+// @access  Private
+exports.getCompletedProblems = async (req, res) => {
+  try {
+    const page = Math.max(1, parseInt(req.query.page) || 1);
+    const limit = Math.min(100, Math.max(1, parseInt(req.query.limit) || 10));
+    const skip = (page - 1) * limit;
+
+    const [total, completedProblems] = await Promise.all([
+      CompletedProblem.countDocuments({ user: req.user.id }),
+      CompletedProblem.find({ user: req.user.id })
+        .populate({
+          path: "subtopic",
+          populate: {
+            path: "topic",
+            select: "name slug",
+          },
+        })
+        .sort({ completedAt: -1 })
+        .skip(skip)
+        .limit(limit),
+    ]);
+
+    return successResponse(
+      res,
+      200,
+      "Completed problems retrieved successfully",
+      {
+        completedProblems,
+        pagination: {
+          page,
+          limit,
+          totalPages: Math.ceil(total / limit),
+          total,
+        },
+      }
+    );
+  } catch (error) {
+    logger.error(`Get completed problems error: ${error.message}`, { error });
+    return errorResponse(res, 500, "Server error", error.message);
+  }
+};
+
+// @desc    Remove problem from completed
+// @route   DELETE /api/v1/subtopics/:id/complete
+// @access  Private
+exports.removeFromCompleted = async (req, res) => {
+  try {
+    const subtopic = await SubTopic.findById(req.params.id);
+    if (!subtopic) {
+      return errorResponse(res, 404, "Subtopic not found");
+    }
+
+    const result = await CompletedProblem.findOneAndDelete({
+      user: req.user.id,
+      subtopic: subtopic._id,
+    });
+
+    if (!result) {
+      return errorResponse(
+        res,
+        404,
+        "This problem was not marked as completed"
+      );
+    }
+
+    // Update subtopic status
+    subtopic.status = "pending";
+    await subtopic.save();
+
+    return successResponse(
+      res,
+      200,
+      "Problem removed from completed successfully"
+    );
+  } catch (error) {
+    logger.error(`Remove from completed error: ${error.message}`, { error });
+    if (error.name === "CastError") {
+      return errorResponse(res, 400, "Invalid subtopic ID format");
+    }
     return errorResponse(res, 500, "Server error", error.message);
   }
 };

@@ -7,6 +7,7 @@ const {
   getUsers,
   updateUsers,
   deleteUser,
+  getDashboardStats,
 } = require("../controllers/auth");
 
 const router = express.Router();
@@ -20,5 +21,7 @@ router.post("/logout", protect, logout);
 router.get("/admin/users", protect, getUsers);
 router.put("/admin/update-details/:id", protect, updateUsers);
 router.delete("/admin/delete-user/:id", protect, deleteUser);
+
+router.get("/admin/dashboard-stats", getDashboardStats);
 
 module.exports = router;

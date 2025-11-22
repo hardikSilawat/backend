@@ -2,6 +2,9 @@
 const User = require("../models/User");
 const { successResponse, errorResponse } = require("../utils/response");
 const logger = require("../utils/logger");
+const Topic = require("../models/Topic");
+const SubTopic = require("../models/SubTopic");
+const CompletedProblem = require("../models/CompletedProblem");
 
 // @desc    Register a new user
 // @route   POST /api/v1/auth/register
@@ -240,5 +243,147 @@ exports.deleteUser = async (req, res) => {
       deletedBy: req.user?.id,
     });
     return errorResponse(res, 500, "Error deleting user", err.message);
+  }
+};
+
+exports.getDashboardStats = async (req, res) => {
+  try {
+    // Get total users (excluding admins)
+    const totalUsers = await User.countDocuments({ role: "user" });
+
+    // Get total active topics
+    const totalTopics = await Topic.countDocuments({ isActive: true });
+
+    // Get total subtopics
+    const totalSubtopics = await SubTopic.countDocuments();
+
+    // Get completed problems statistics
+    const completedStats = await CompletedProblem.aggregate([
+      {
+        $lookup: {
+          from: "subtopics",
+          localField: "subtopic",
+          foreignField: "_id",
+          as: "subtopicData",
+        },
+      },
+      {
+        $unwind: "$subtopicData",
+      },
+      {
+        $group: {
+          _id: null,
+          totalCompleted: { $sum: 1 },
+          uniqueUsers: { $addToSet: "$user" },
+        },
+      },
+    ]);
+
+    // Get user progress statistics
+    const userProgress = await CompletedProblem.aggregate([
+      {
+        $group: {
+          _id: "$user",
+          completedCount: { $sum: 1 },
+        },
+      },
+      {
+        $group: {
+          _id: null,
+          averageCompletion: { $avg: "$completedCount" },
+          maxCompletion: { $max: "$completedCount" },
+        },
+      },
+    ]);
+
+    // Get topic-wise completion stats
+    const topicStats = await CompletedProblem.aggregate([
+      {
+        $lookup: {
+          from: "subtopics",
+          localField: "subtopic",
+          foreignField: "_id",
+          as: "subtopicData",
+        },
+      },
+      { $unwind: "$subtopicData" },
+      {
+        $lookup: {
+          from: "topics",
+          localField: "subtopicData.topic",
+          foreignField: "_id",
+          as: "topicData",
+        },
+      },
+      { $unwind: "$topicData" },
+      {
+        $group: {
+          _id: "$topicData._id",
+          topicName: { $first: "$topicData.name" },
+          completedCount: { $sum: 1 },
+        },
+      },
+      { $sort: { completedCount: -1 } },
+      { $limit: 5 },
+    ]);
+
+    // Get recent activity (last 7 days)
+    const sevenDaysAgo = new Date();
+    sevenDaysAgo.setDate(sevenDaysAgo.getDate() - 7);
+
+    const recentActivity = await CompletedProblem.aggregate([
+      {
+        $match: {
+          completedAt: { $gte: sevenDaysAgo },
+        },
+      },
+      {
+        $group: {
+          _id: { $dateToString: { format: "%Y-%m-%d", date: "$completedAt" } },
+          count: { $sum: 1 },
+        },
+      },
+      { $sort: { _id: 1 } },
+    ]);
+
+    return res.status(200).json({
+      success: true,
+      message: "Dashboard statistics retrieved successfully",
+      data: {
+        users: {
+          total: totalUsers,
+          activeToday: 0,
+          newThisWeek: await User.countDocuments({
+            role: "user", // Add this line to filter only 'user' role
+            createdAt: { $gte: sevenDaysAgo },
+          }),
+        },
+        topics: {
+          total: totalTopics,
+          subtopics: totalSubtopics,
+          completionRate:
+            totalSubtopics > 0
+              ? ((completedStats[0]?.totalCompleted || 0) / totalSubtopics) *
+                100
+              : 0,
+        },
+        progress: {
+          totalCompleted: completedStats[0]?.totalCompleted || 0,
+          averagePerUser: userProgress[0]?.averageCompletion
+            ? Math.round(userProgress[0].averageCompletion * 100) / 100
+            : 0,
+          maxCompleted: userProgress[0]?.maxCompletion || 0,
+        },
+        topTopics: topicStats,
+        recentActivity,
+      },
+    });
+  } catch (err) {
+    console.error("Dashboard stats error:", err);
+    return res.status(500).json({
+      success: false,
+      message: "Error retrieving dashboard statistics",
+      error: err.message,
+    });
   }
 };
